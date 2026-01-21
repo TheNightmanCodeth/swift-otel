@@ -13,7 +13,7 @@
 
 #if !OTLPHTTP
 // Empty when above trait(s) are disabled.
-#else
+#elseif !OTLPHTTPURLSession
 import AsyncHTTPClient
 import Logging
 import NIOHTTP1
@@ -134,17 +134,6 @@ final class OTLPHTTPExporter<Request: Message, Response: Message>: Sendable {
     }
 }
 
-enum OTLPHTTPExporterError: Swift.Error {
-    case responseHasUnsupportedContentType(String)
-    case responseHasMissingContentType
-    case requestFailed(HTTPResponseStatus)
-    case requestFailedWithRetryableError
-    case partialMTLSdConfiguration
-    case serverCertificateFileNotFound(String)
-    case clientCertificateFileNotFound(String)
-    case clientKeyFileNotFound(String)
-}
-
 extension HTTPClient {
     fileprivate convenience init(configuration: OTel.Configuration.OTLPExporterConfiguration) throws {
         try self.init(
@@ -196,60 +185,7 @@ extension HTTPClient.Configuration {
     }
 }
 
-extension HTTPClient {
-    struct RetryPolicy: Sendable {
-        private(set) var attempts: Int
-        private(set) var maxAttempts: Int
-        private let baseDelay: Duration
-        private let maxDelay: Duration
-        private let jitter: Double
-        private(set) var policy: @Sendable (HTTPClientResponse) -> PolicyDecision
-
-        init(
-            maxAttempts: Int = 10,
-            baseDelay: Duration = .seconds(1),
-            maxDelay: Duration = .seconds(60),
-            jitter: Double = 0.1,
-            policy: @escaping @Sendable (HTTPClientResponse) -> PolicyDecision
-        ) {
-            self.attempts = 0
-            self.maxAttempts = maxAttempts
-            self.baseDelay = baseDelay
-            self.maxDelay = maxDelay
-            self.jitter = jitter
-            self.policy = policy
-        }
-
-        enum PolicyDecision {
-            case doNotRetry
-            case retryWithBackoff
-            case retryWithSpecificBackoff(Duration)
-        }
-
-        enum RetryDecision: Equatable {
-            case doNotRetry
-            case retryAfter(Duration)
-        }
-
-        mutating func shouldRetry(response: HTTPClientResponse) -> RetryDecision {
-            attempts += 1
-            if attempts >= maxAttempts { return .doNotRetry }
-            switch policy(response) {
-            case .doNotRetry: return .doNotRetry
-            case .retryWithBackoff:
-                let exponentialDelay = baseDelay * (2 << (attempts - 2))
-                let cappedDelay = min(exponentialDelay, maxDelay)
-                let jitterAmount = cappedDelay * jitter * Double.random(in: -1 ... 1)
-                let delay = max(Duration.zero, cappedDelay + jitterAmount)
-                return .retryAfter(delay)
-            case .retryWithSpecificBackoff(let delay):
-                return .retryAfter(delay)
-            }
-        }
-    }
-}
-
-extension HTTPClient.RetryPolicy {
+extension RetryPolicy {
     /// A policy for use with the OTLP/HTTP exporter, following guidance from the spec.
     ///
     /// - See: [](https://opentelemetry.io/docs/specs/otlp/#retryable-response-codes)
@@ -300,13 +236,52 @@ extension HTTPClient {
     }
 }
 
+#endif
+
+#if OTLPHTTPURLSession || OTLPHTTP
+import SwiftProtobuf
+package import struct NIOCore.ByteBuffer
+
+#if canImport(FoundationEssentials)
+package import struct FoundationEssentials.Data
+#else
+package import struct Foundation.Data
+#endif
+
+#if OTLPHTTPURLSession
+#if canImport(FoundationNetworking)
+package import class FoundationNetworking.URLResponse
+#else
+package import class Foundation.URLResponse
+#endif
+typealias HTTPClientResponse = URLResponse
+typealias HTTPResponseStatus = Int
+#endif
+
+enum OTLPHTTPExporterError: Swift.Error {
+    case responseHasUnsupportedContentType(String)
+    case responseHasMissingContentType
+    case requestFailed(HTTPResponseStatus)
+    case requestFailedWithRetryableError
+    case partialMTLSdConfiguration
+    case serverCertificateFileNotFound(String)
+    case clientCertificateFileNotFound(String)
+    case clientKeyFileNotFound(String)
+}
+
 /// This internal type allows us to conform to `SwiftProtobufContiguousBytes` and avoid a copy on the response.
 package struct ByteBufferWrapper: SwiftProtobufContiguousBytes {
     package var backing: ByteBuffer
-
+    
+    #if OTLPHTTPURLSession
+    package init(backing: Data) {
+        self.backing = .init(data: backing)
+    }
+    #else
     package init(backing: ByteBuffer) {
         self.backing = backing
     }
+    #endif
 
     init(_ sequence: some Sequence<UInt8>) {
         self.backing = ByteBuffer(bytes: sequence)
@@ -324,6 +299,61 @@ package struct ByteBufferWrapper: SwiftProtobufContiguousBytes {
 
     mutating func withUnsafeMutableBytes<R>(_ body: (UnsafeMutableRawBufferPointer) throws -> R) rethrows -> R {
         try self.backing.withUnsafeMutableReadableBytes { try body($0) }
+    }
+    
+    func asData() -> Data {
+        Data(buffer: backing)
+    }
+}
+
+struct RetryPolicy: Sendable {
+    private(set) var attempts: Int
+    private(set) var maxAttempts: Int
+    private let baseDelay: Duration
+    private let maxDelay: Duration
+    private let jitter: Double
+    private(set) var policy: @Sendable (HTTPClientResponse) -> PolicyDecision
+
+    init(
+        maxAttempts: Int = 10,
+        baseDelay: Duration = .seconds(1),
+        maxDelay: Duration = .seconds(60),
+        jitter: Double = 0.1,
+        policy: @escaping @Sendable (HTTPClientResponse) -> PolicyDecision
+    ) {
+        self.attempts = 0
+        self.maxAttempts = maxAttempts
+        self.baseDelay = baseDelay
+        self.maxDelay = maxDelay
+        self.jitter = jitter
+        self.policy = policy
+    }
+
+    enum PolicyDecision {
+        case doNotRetry
+        case retryWithBackoff
+        case retryWithSpecificBackoff(Duration)
+    }
+
+    enum RetryDecision: Equatable {
+        case doNotRetry
+        case retryAfter(Duration)
+    }
+
+    mutating func shouldRetry(response: HTTPClientResponse) -> RetryDecision {
+        attempts += 1
+        if attempts >= maxAttempts { return .doNotRetry }
+        switch policy(response) {
+        case .doNotRetry: return .doNotRetry
+        case .retryWithBackoff:
+            let exponentialDelay = baseDelay * (2 << (attempts - 2))
+            let cappedDelay = min(exponentialDelay, maxDelay)
+            let jitterAmount = cappedDelay * jitter * Double.random(in: -1 ... 1)
+            let delay = max(Duration.zero, cappedDelay + jitterAmount)
+            return .retryAfter(delay)
+        case .retryWithSpecificBackoff(let delay):
+            return .retryAfter(delay)
+        }
     }
 }
 #endif

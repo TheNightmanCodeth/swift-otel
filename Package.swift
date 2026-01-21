@@ -14,9 +14,10 @@ let package = Package(
         .library(name: "OTel", targets: ["OTel"]),
     ],
     traits: [
-        .trait(name: "OTLPHTTP", description: "OTLP/HTTP exporter support"),
+        .trait(name: "OTLPHTTP", description: "OTLP/HTTP exporter support (uses AsyncHTTPClient)"),
         .trait(name: "OTLPGRPC", description: "OTLP/gRPC exporter support"),
-        .default(enabledTraits: ["OTLPHTTP", "OTLPGRPC"]),
+        .trait(name: "OTLPHTTPURLSession", description: "OTLP/HTTP exporter support (uses URLSession)"),
+        .default(enabledTraits: ["OTLPHTTPURLSession", "OTLPGRPC"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.2.0"),
@@ -63,8 +64,8 @@ let package = Package(
                 .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
                 .product(name: "Atomics", package: "swift-atomics"),
                 .product(name: "W3CTraceContext", package: "swift-w3c-trace-context"),
-                // OTLP exporter -- only when OTLPHTTP and/or OTLPGRPC traits are enabled.
-                .product(name: "SwiftProtobuf", package: "swift-protobuf", condition: .when(traits: ["OTLPHTTP", "OTLPGRPC"], alwaysIncludeOnKnownBrokenToolchains: true)),
+                // OTLP exporter -- only when OTLPHTTP, OTLPHTTPURLSession and/or OTLPGRPC traits are enabled.
+                .product(name: "SwiftProtobuf", package: "swift-protobuf", condition: .when(traits: ["OTLPHTTP", "OTLPGRPC", "OTLPHTTPURLSession"], alwaysIncludeOnKnownBrokenToolchains: true)),
                 // OTLP/HTTP exporter -- only when OTLPHTTP trait is enabled.
                 .product(name: "AsyncHTTPClient", package: "async-http-client", condition: .when(traits: ["OTLPHTTP"], alwaysIncludeOnKnownBrokenToolchains: true)),
                 .product(name: "NIOSSL", package: "swift-nio-ssl", condition: .when(traits: ["OTLPHTTP"], alwaysIncludeOnKnownBrokenToolchains: true)),
