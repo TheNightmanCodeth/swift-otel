@@ -102,6 +102,41 @@ import Tracing
             try await group.waitForAll()
         }
     }
+    
+    @Test func testOTLPHTTPContentTypeParams() async throws {
+        // Some collectors (i.e., Splunk) will respond with "Content-Type: application/json; charset=utf-8"
+        // even though this goes against the spec. 
+        // - source: https://opentelemetry.io/docs/specs/otlp/#otlphttp-response
+        // - related issue: https://github.com/swift-otel/swift-otel/issues/400
+        
+        try await withThrowingTaskGroup { group in
+            let testServer = NIOHTTP1TestServer(group: .singletonMultiThreadedEventLoopGroup)
+            defer { #expect(throws: Never.self) { try testServer.stop() } }
+
+            // Client
+            group.addTask {
+                var config = OTel.Configuration.OTLPExporterConfiguration.default
+                config.protocol = .httpJSON
+                config.endpoint = "http://127.0.0.1:\(testServer.serverPort)/some/path"
+                let exporter = try OTLPHTTPSpanExporter(configuration: config)
+                let span = OTelFinishedSpan.stub()
+                await #expect(throws: Never.self) { try await exporter.export([span]) }
+            }
+            
+            // We aren't actually testing this here but still need to call
+            _ = try testServer.receiveHead()
+            _ = try testServer.receiveBody()
+            _ = try testServer.receiveEnd()
+
+            try testServer.writeOutbound(.head(.init(version: .http1_1, status: .ok, headers: ["Content-Type": "application/json; charset=utf-8"])))
+            let response = Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceResponse()
+            let body: ByteBufferWrapper = try response.jsonUTF8Bytes()
+            try testServer.writeOutbound(.body(.byteBuffer(body.backing)))
+            try testServer.writeOutbound(.end(nil))
+
+            try await group.waitForAll()
+        }
+    }
 
     @Test func testOTLPHTTPMetricExporterProtobuf() async throws {
         try await withThrowingTaskGroup { group in

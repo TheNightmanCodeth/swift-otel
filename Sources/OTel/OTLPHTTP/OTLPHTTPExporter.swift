@@ -106,7 +106,9 @@ final class OTLPHTTPExporter<Request: Message, Response: Message>: Sendable {
 
         // https://opentelemetry.io/docs/specs/otlp/#full-success-1
         let body = try await response.body.collect(upTo: 2 * 1024 * 1024)
-        let responseMessage = switch response.headers.first(name: "Content-Type") {
+        // Disregard parameters in the content-type string (i.e., "application/json; charset=utf-8")
+        let contentType = response.headers.first(name: "Content-Type")?.components(separatedBy: ";").first
+        let responseMessage = switch contentType {
         case "application/x-protobuf":
             try Response(serializedBytes: ByteBufferWrapper(backing: body))
         case "application/json":
