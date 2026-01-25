@@ -19,14 +19,14 @@ import Logging
 final class OTLPHTTPSpanExporter: OTelSpanExporter {
     typealias Request = Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceRequest
     typealias Response = Opentelemetry_Proto_Collector_Trace_V1_ExportTraceServiceResponse
-    let exporter: OTLPHTTPExporter<Request, Response>
+    let exporter: any OTLPHTTPExporterProtocol
     private let logger: Logger
 
     init(configuration: OTel.Configuration.OTLPExporterConfiguration, logger: Logger) throws {
         self.logger = logger.withMetadata(component: "OTLPHTTPSpanExporter")
         var configuration = configuration
         configuration.endpoint = configuration.tracesHTTPEndpoint
-        exporter = try OTLPHTTPExporter(configuration: configuration, logger: logger)
+        exporter = try (configuration.httpExporterFactory?(configuration, logger) ?? OTLPHTTPExporter(configuration: configuration, logger: logger))
     }
 
     func run() async throws {
@@ -38,7 +38,7 @@ final class OTLPHTTPSpanExporter: OTelSpanExporter {
         let proto = Request.with { request in
             request.resourceSpans = [Opentelemetry_Proto_Trace_V1_ResourceSpans(batch)]
         }
-        let response = try await exporter.send(proto)
+        let response: Response = try await exporter.send(proto)
         if response.hasPartialSuccess {
             // https://opentelemetry.io/docs/specs/otlp/#partial-success-1
             /// > If the request is only partially accepted ... the server MUST initialize the `partial_success` field

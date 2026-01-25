@@ -881,6 +881,14 @@ extension OTel.Configuration {
         /// - Supported values: `grpc`, `http/protobuf`, `http/json`
         /// - Notes: Signal-specific configuration takes precedence over the general configuration.
         public var `protocol`: Protocol
+      
+        #if OTLPHTTP
+        /// ``OTLPHTTPExporterProtocol`` factory which provides OTLPHTTPExporters a client to use
+        /// for sending network requests.
+        ///
+        /// Leave this unset to use the default HTTP client implementation. 
+        public var httpExporterFactory: (@Sendable (OTLPExporterConfiguration, Logger) throws -> any OTLPHTTPExporterProtocol)?
+        #endif
 
         /// Default OTLP exporter configuration.
         ///

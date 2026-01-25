@@ -31,7 +31,7 @@ import struct Foundation.URL
 package import struct NIOCore.ByteBuffer
 package import struct NIOCore.TimeAmount
 
-final class OTLPHTTPExporter<Request: Message, Response: Message>: Sendable {
+final class OTLPHTTPExporter: OTLPHTTPExporterProtocol {
     private let logger: Logger
     let configuration: OTel.Configuration.OTLPExporterConfiguration
     let httpClient: HTTPClient
@@ -59,7 +59,7 @@ final class OTLPHTTPExporter<Request: Message, Response: Message>: Sendable {
         try await gracefulShutdown()
     }
 
-    func send(_ proto: Request) async throws -> Response {
+    func send<Request: Message, Response: Message>(_ proto: Request) async throws -> Response {
         // https://opentelemetry.io/docs/specs/otlp/#otlphttp-request
         var request = HTTPClientRequest(url: self.configuration.endpoint)
         request.method = .POST
